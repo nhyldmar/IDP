@@ -8,37 +8,33 @@ import keyboard
 import sys
 import serial
 
-# Area mask:            50:1530, 180:1810   (full zone)
-#                       50:1530, 1020:1810  (danger zone)
+# Area mask:            50:1530, 180:1810   (image)
+#                       0:640, 0:550        (streaming)
 # Cell parameters:      (160, 80, 50), (255, 190, 130)
 # Mildred parameters:   (120, 190, 230), (160, 240, 255)    (orange)
 #                       (170, 130, 200), (210, 170, 240)    (purple)
+#                       (50, 85, 230), (180, 210, 255)      (red)
+#                       (130, 140, 20), (200, 220, 130)     (green)
 
 # User inputs
-streaming = True
-controlled = True
+streaming = False
+controlled = False
 camera = 2
 port = 'COM3'
-image_name = "test_data/mildred_1.jpg"
+image_name = "test_data/mildred_stream.jpg"
 
 # Parameters
 cell_boundaries = (((160, 80, 50), (255, 190, 130)),
                    )
 cell_boundaries = np.array(cell_boundaries, dtype="uint8")
 
-mildred_boundaries = (((120, 190, 230), (160, 240, 255)),
-                      ((170, 130, 200), (210, 170, 240)))
+mildred_boundaries = (((120, 190, 230), (195, 250, 255)),
+                      ((170, 130, 190), (230, 205, 240)))
 mildred_boundaries = np.array(mildred_boundaries, dtype="uint8")
 
-if streaming:
-    cell_thresholds = (3, 3)
-    mildred_thresholds = (3, 3)
-    image_boundaries = ((0, 640), (0, 550))
-
-else:
-    cell_thresholds = (12, 12)
-    mildred_thresholds = (5, 5)
-    image_boundaries = ((50, 1530), (180, 1810))
+cell_thresholds = ((4, 4), (10, 10))
+mildred_thresholds = ((20, 20), (40, 40))
+image_boundaries = ((0, 640), (0, 550))
 
 
 def startStream(camera):
@@ -86,7 +82,7 @@ def readColour(image, boundaries, thresholds):
         # Draw bounding boxes and get coordinates
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
-            if (w, h) > thresholds:
+            if thresholds[0][0] < w < thresholds[1][0] and thresholds[0][1] < h < thresholds[1][1]:
                 cv2.rectangle(image, (x, y), (x + w, y + h), (0, 0, 0), 2)
                 coordinates = np.concatenate((coordinates, [x + w / 2, y + h / 2]))
     coordinates = np.reshape(coordinates, (-1, 2))
@@ -123,7 +119,7 @@ def readImage(image):
     return cell_coordinates, (mildred_centre, mildred_direction), image, mask
 
 
-def findNearestCell(image, mildred_centre, cell_coordinates):
+def findNearestCell(image, mildred_centre, mildred_direction, cell_coordinates):
     """Given the current positions of everything, return the coordinates of the closest cell"""
     if cell_coordinates.shape[0] and mildred_centre[0]:
         distances = np.subtract(cell_coordinates, mildred_centre)
@@ -132,39 +128,42 @@ def findNearestCell(image, mildred_centre, cell_coordinates):
         min_index = distances.tolist().index(min_distance)
         min_coordinates = cell_coordinates[min_index]
         min_coordinates = np.array(min_coordinates, dtype="int16")
+        min_direction = np.subtract(min_coordinates, mildred_centre)
+        angle = np.arccos(np.clip(np.dot()))
         cv2.circle(image, tuple(min_coordinates), 12, (0, 0, 255), 2)
 
     else:
         min_coordinates = [0, 0]
+        angle = 0
         min_distance = 0
 
     return image, min_coordinates, min_distance
 
 
-def processInputs(image, mildred):
+def processPlayer(image):
     """Checks for inputs."""
     # Check for directional input
     if keyboard.is_pressed('up'):
-        mildred.write('u')
+        motor_speeds = (1, 1)
         arrow_direction = (0, -1)
     elif keyboard.is_pressed('down'):
-        mildred.write('d')
+        motor_speeds = (-1, -1)
         arrow_direction = (0, 1)
     elif keyboard.is_pressed('left'):
-        mildred.write('l')
+        motor_speeds = (-1, 1)
         arrow_direction = (-1, 0)
     elif keyboard.is_pressed('right'):
-        mildred.write('r')
+        motor_speeds = (1, -1)
         arrow_direction = (1, 0)
     else:
-        mildred.write('s')
+        motor_speeds = (0, 0)
         arrow_direction = (0, 0)
 
     arrow_start = np.subtract(image.shape[:-1], (50, 100))
     arrow_direction = 10 * np.array(arrow_direction)
     drawArrow(image, arrow_start, arrow_direction)
 
-    return image
+    return image, motor_speeds
 
 
 def drawArrow(image, start, direction):
@@ -196,7 +195,7 @@ if streaming and controlled:
 
         image, min_coordinates, min_distance = findNearestCell(image, mildred_centre, cell_coordinates)
 
-        image = processInputs(image, mildred)
+        image, motor_speeds = processPlayer(image)
 
         cv2.imshow("Mildred Vision", np.hstack((image, mask)))
 
