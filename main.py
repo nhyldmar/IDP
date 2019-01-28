@@ -107,20 +107,20 @@ def readImage(image):
     if mildred_coordinates.shape[0] == 2:
         mildred_centre = np.average(mildred_coordinates.T, axis=1)
         mildred_direction = np.subtract(*mildred_coordinates)
-
+        mildred_direction = mildred_direction / np.linalg.norm(mildred_direction)
     else:
-        # print("{} Mildred markers".format(mildred_coordinates.shape[0]))
         mildred_centre = [0, 0]
         mildred_direction = [0, 0]
 
     # Draw arrowed line for mildred
     drawArrow(image, mildred_centre, mildred_direction)
 
-    return cell_coordinates, (mildred_centre, mildred_direction), image, mask
+    return image, cell_coordinates, (mildred_centre, mildred_direction), mask
 
 
 def findNearestCell(image, mildred_centre, mildred_direction, cell_coordinates):
-    """Given the current positions of everything, return the coordinates of the closest cell"""
+    """Given the current positions of everything, return the coordinates of and distance and angle to the closest
+    cell"""
     if cell_coordinates.shape[0] and mildred_centre[0]:
         distances = np.subtract(cell_coordinates, mildred_centre)
         distances = np.linalg.norm(distances, axis=1)
@@ -129,15 +129,36 @@ def findNearestCell(image, mildred_centre, mildred_direction, cell_coordinates):
         min_coordinates = cell_coordinates[min_index]
         min_coordinates = np.array(min_coordinates, dtype="int16")
         min_direction = np.subtract(min_coordinates, mildred_centre)
-        angle = np.arccos(np.clip(np.dot()))
-        cv2.circle(image, tuple(min_coordinates), 12, (0, 0, 255), 2)
+        min_direction /= np.linalg.norm(min_direction)
+        min_angle = np.arccos(np.clip(np.dot(mildred_direction, min_direction), -1, 1))
+        determinant = np.linalg.det((mildred_direction, min_direction))
+        if determinant < 0:
+            min_angle = -min_angle
+        drawArrow(image, mildred_centre, min_direction)
 
     else:
         min_coordinates = [0, 0]
-        angle = 0
         min_distance = 0
+        min_angle = 0
 
-    return image, min_coordinates, min_distance
+    return min_coordinates, min_distance, min_angle
+
+
+def approachCell(min_distance, min_angle):
+    """Given a distance and angle to a cell, returns motor speeds."""
+    if np.abs(min_angle) > 0.1:
+        scaled_angle = np.clip(min_angle, -1, 1)
+        motor_speeds = (scaled_angle, -scaled_angle)
+    else:
+        scaled_distance = np.clip(min_distance, -1, 1)
+        motor_speeds = (scaled_distance, scaled_distance)
+
+    return motor_speeds
+
+
+def sendSpeeds(mildred, motor_speeds):
+    """Given motor speeds, sends them to the microcontroller."""
+    pass  # TODO: Write communication protocol
 
 
 def processPlayer(image):
@@ -163,14 +184,15 @@ def processPlayer(image):
     arrow_direction = 10 * np.array(arrow_direction)
     drawArrow(image, arrow_start, arrow_direction)
 
-    return image, motor_speeds
+    return motor_speeds
 
 
 def drawArrow(image, start, direction):
     """Given an image, a point and a direction, draws a line on the image."""
     start = np.array(start, dtype="int16")
-    direction = np.array(direction, dtype="int16")
-    end = start + 3 * direction
+    direction = np.array(direction)
+    end = start + 50 * direction
+    end = np.array(end, dtype="int16")
     start = tuple(start)
     end = tuple(end)
     cv2.arrowedLine(image, start, end, (0, 0, 255), 2)
@@ -191,11 +213,12 @@ if streaming and controlled:
         if key == 27 or not is_on:
             break
 
-        cell_coordinates, (mildred_centre, mildred_direction), image, mask = readImage(image)
+        image, cell_coordinates, (mildred_centre, mildred_direction), mask = readImage(image)
 
-        image, min_coordinates, min_distance = findNearestCell(image, mildred_centre, cell_coordinates)
+        min_coordinates, min_distance, min_angle = findNearestCell(image, mildred_centre, mildred_direction,
+                                                                   cell_coordinates)
 
-        image, motor_speeds = processPlayer(image)
+        motor_speeds = processPlayer(image)
 
         cv2.imshow("Mildred Vision", np.hstack((image, mask)))
 
@@ -215,9 +238,12 @@ elif streaming:
         if key == 27 or not is_on:
             break
 
-        cell_coordinates, (mildred_centre, mildred_direction), image, mask = readImage(image)
+        image, cell_coordinates, (mildred_centre, mildred_direction), mask = readImage(image)
 
-        image, min_coordinates, min_distance = findNearestCell(image, mildred_centre, cell_coordinates)
+        min_coordinates, min_distance, min_angle = findNearestCell(image, mildred_centre, mildred_direction,
+                                                                   cell_coordinates)
+
+        motor_speeds = approachCell(min_distance, min_angle)
 
         cv2.imshow("Mildred Vision", np.hstack((image, mask)))
 
@@ -226,9 +252,12 @@ elif streaming:
 else:
     image = cv2.imread(image_name)
 
-    cell_coordinates, (mildred_centre, mildred_direction), image, mask = readImage(image)
+    image, cell_coordinates, (mildred_centre, mildred_direction), mask = readImage(image)
 
-    image, min_coordinates, min_distance = findNearestCell(image, mildred_centre, cell_coordinates)
+    min_coordinates, min_distance, min_angle = findNearestCell(image, mildred_centre, mildred_direction,
+                                                               cell_coordinates)
+
+    motor_speeds = approachCell(min_distance, min_angle)
 
     cv2.imwrite("mildred_vision.jpg", np.hstack((image, mask)))
 
