@@ -1,39 +1,39 @@
-"""Main file for offboard processing.
-Robot Name: Mildred
-"""
+"""Main file for off board processing.
+Orange marker on front."""
 
 import cv2
 import numpy as np
 import keyboard
 import sys
 import serial
+import struct
 
 # Area mask:            50:1530, 180:1810   (image)
 #                       0:640, 0:550        (streaming)
 # Cell parameters:      (160, 80, 50), (255, 190, 130)
-# Mildred parameters:   (120, 190, 230), (160, 240, 255)    (orange)
+# Robot parameters:     (120, 190, 230), (160, 240, 255)    (orange)
 #                       (170, 130, 200), (210, 170, 240)    (purple)
 #                       (50, 85, 230), (180, 210, 255)      (red)
 #                       (130, 140, 20), (200, 220, 130)     (green)
 
 # User inputs
-streaming = False
+streaming = True
 controlled = False
 camera = 2
 port = 'COM3'
-image_name = "test_data/mildred_stream.jpg"
+image_name = "test_data/stream.jpg"
 
 # Parameters
 cell_boundaries = (((160, 80, 50), (255, 190, 130)),
                    )
 cell_boundaries = np.array(cell_boundaries, dtype="uint8")
 
-mildred_boundaries = (((120, 190, 230), (195, 250, 255)),
-                      ((170, 130, 190), (230, 205, 240)))
-mildred_boundaries = np.array(mildred_boundaries, dtype="uint8")
+robot_boundaries = (((120, 190, 230), (195, 250, 255)),
+                    ((170, 130, 190), (230, 205, 240)))
+robot_boundaries = np.array(robot_boundaries, dtype="uint8")
 
 cell_thresholds = ((4, 4), (10, 10))
-mildred_thresholds = ((20, 20), (40, 40))
+robot_thresholds = ((20, 20), (40, 40))
 image_boundaries = ((0, 640), (0, 550))
 
 
@@ -44,10 +44,10 @@ def startStream(camera):
 
     # Check for stream
     if not stream.isOpened():
-        print("Mildred can't find her reading glasses".format(camera))
+        print("Camera {} not found".format(camera))
         stream.release()
         sys.exit()
-    print("Mildred put on her reading glasses")
+    print("Streaming...")
 
     return stream
 
@@ -55,13 +55,13 @@ def startStream(camera):
 def startSerial(port):
     """Given a port, tries to start a serial stream and returns it"""
     try:
-        mildred = serial.Serial(port, 115200, timeout=.1)
-        print("Mildred turned on her hearing aids")
+        board = serial.Serial(port, 115200, timeout=.1)
+        print("Sending...")
     except serial.serialutil.SerialException:
-        print("Mildred can't find her hearing aids")
+        print("No board detected at {}".format(port))
         sys.exit()
 
-    return mildred
+    return board
 
 
 def readColour(image, boundaries, thresholds):
@@ -96,45 +96,45 @@ def readImage(image):
     # Crop image to size of operating zone
     image = image[image_boundaries[0][0]:image_boundaries[0][1], image_boundaries[1][0]:image_boundaries[1][1]]
 
-    # Get data from cells and mildred colour masks
+    # Get data from cells and robot colour masks
     cell_mask, cell_coordinates = readColour(image, cell_boundaries, cell_thresholds)
-    mildred_mask, mildred_coordinates = readColour(image, mildred_boundaries, mildred_thresholds)
+    robot_mask, robot_coordinates = readColour(image, robot_boundaries, robot_thresholds)
 
     # Combine colour masks
-    mask = cv2.bitwise_or(cell_mask, mildred_mask)
+    mask = cv2.bitwise_or(cell_mask, robot_mask)
 
     # Find centre and direction
-    if mildred_coordinates.shape[0] == 2:
-        mildred_centre = np.average(mildred_coordinates.T, axis=1)
-        mildred_direction = np.subtract(*mildred_coordinates)
-        mildred_direction = mildred_direction / np.linalg.norm(mildred_direction)
+    if robot_coordinates.shape[0] == 2:
+        robot_centre = np.average(robot_coordinates.T, axis=1)
+        robot_direction = np.subtract(*robot_coordinates)
+        robot_direction = robot_direction / np.linalg.norm(robot_direction)
     else:
-        mildred_centre = [0, 0]
-        mildred_direction = [0, 0]
+        robot_centre = [0, 0]
+        robot_direction = [0, 0]
 
-    # Draw arrowed line for mildred
-    drawArrow(image, mildred_centre, mildred_direction)
+    # Draw arrowed line for robot
+    drawArrow(image, robot_centre, robot_direction)
 
-    return image, cell_coordinates, (mildred_centre, mildred_direction), mask
+    return image, cell_coordinates, (robot_centre, robot_direction), mask
 
 
-def findNearestCell(image, mildred_centre, mildred_direction, cell_coordinates):
+def findNearestCell(image, robot_centre, robot_direction, cell_coordinates):
     """Given the current positions of everything, return the coordinates of and distance and angle to the closest
     cell"""
-    if cell_coordinates.shape[0] and mildred_centre[0]:
-        distances = np.subtract(cell_coordinates, mildred_centre)
+    if cell_coordinates.shape[0] and robot_centre[0]:
+        distances = np.subtract(cell_coordinates, robot_centre)
         distances = np.linalg.norm(distances, axis=1)
         min_distance = np.amin(distances)
         min_index = distances.tolist().index(min_distance)
         min_coordinates = cell_coordinates[min_index]
         min_coordinates = np.array(min_coordinates, dtype="int16")
-        min_direction = np.subtract(min_coordinates, mildred_centre)
+        min_direction = np.subtract(min_coordinates, robot_centre)
         min_direction /= np.linalg.norm(min_direction)
-        min_angle = np.arccos(np.clip(np.dot(mildred_direction, min_direction), -1, 1))
-        determinant = np.linalg.det((mildred_direction, min_direction))
+        min_angle = np.arccos(np.clip(np.dot(robot_direction, min_direction), -1, 1))
+        determinant = np.linalg.det((robot_direction, min_direction))
         if determinant < 0:
             min_angle = -min_angle
-        drawArrow(image, mildred_centre, min_direction)
+        drawArrow(image, robot_centre, min_direction)
 
     else:
         min_coordinates = [0, 0]
@@ -156,13 +156,17 @@ def approachCell(min_distance, min_angle):
     return motor_speeds
 
 
-def sendSpeeds(mildred, motor_speeds):
-    """Given motor speeds, sends them to the microcontroller."""
-    pass  # TODO: Write communication protocol
+def sendSpeeds(board, motor_speeds):
+    """Given motor speeds, sends them to the board."""
+    motor_speeds = [speed * 100 for speed in motor_speeds]
+    motor_speeds = np.array(motor_speeds, dtype="int8")
+    buffer = bytearray(struct.pack('cbb', b's', *motor_speeds))
+    if board.read() == b'r':
+        board.write(buffer)
 
 
 def processPlayer(image):
-    """Checks for inputs."""
+    """Checks for keyboard inputs."""
     # Check for directional input
     if keyboard.is_pressed('up'):
         motor_speeds = (1, 1)
@@ -200,7 +204,7 @@ def drawArrow(image, start, direction):
 
 if streaming and controlled:
     stream = startStream(camera)
-    mildred = startSerial(port)
+    board = startSerial(port)
 
     # Main loop for streaming
     is_on = True
@@ -213,20 +217,24 @@ if streaming and controlled:
         if key == 27 or not is_on:
             break
 
-        image, cell_coordinates, (mildred_centre, mildred_direction), mask = readImage(image)
+        image, cell_coordinates, (robot_centre, robot_direction), mask = readImage(image)
 
-        min_coordinates, min_distance, min_angle = findNearestCell(image, mildred_centre, mildred_direction,
+        min_coordinates, min_distance, min_angle = findNearestCell(image, robot_centre, robot_direction,
                                                                    cell_coordinates)
 
         motor_speeds = processPlayer(image)
 
-        cv2.imshow("Mildred Vision", np.hstack((image, mask)))
+        sendSpeeds(board, motor_speeds)
+
+        cv2.imshow("Stream", np.hstack((image, mask)))
 
     stream.release()
 
 elif streaming:
     stream = startStream(camera)
 
+    board = startSerial(port)
+
     # Main loop for streaming
     is_on = True
     while is_on:
@@ -238,27 +246,29 @@ elif streaming:
         if key == 27 or not is_on:
             break
 
-        image, cell_coordinates, (mildred_centre, mildred_direction), mask = readImage(image)
+        image, cell_coordinates, (robot_centre, robot_direction), mask = readImage(image)
 
-        min_coordinates, min_distance, min_angle = findNearestCell(image, mildred_centre, mildred_direction,
+        min_coordinates, min_distance, min_angle = findNearestCell(image, robot_centre, robot_direction,
                                                                    cell_coordinates)
 
         motor_speeds = approachCell(min_distance, min_angle)
 
-        cv2.imshow("Mildred Vision", np.hstack((image, mask)))
+        sendSpeeds(board, motor_speeds)
+
+        cv2.imshow("Stream", np.hstack((image, mask)))
 
     stream.release()
 
 else:
     image = cv2.imread(image_name)
 
-    image, cell_coordinates, (mildred_centre, mildred_direction), mask = readImage(image)
+    image, cell_coordinates, (robot_centre, robot_direction), mask = readImage(image)
 
-    min_coordinates, min_distance, min_angle = findNearestCell(image, mildred_centre, mildred_direction,
+    min_coordinates, min_distance, min_angle = findNearestCell(image, robot_centre, robot_direction,
                                                                cell_coordinates)
 
     motor_speeds = approachCell(min_distance, min_angle)
 
-    cv2.imwrite("mildred_vision.jpg", np.hstack((image, mask)))
+    cv2.imwrite("vision.jpg", np.hstack((image, mask)))
 
 cv2.destroyAllWindows()
