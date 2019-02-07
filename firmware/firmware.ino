@@ -18,7 +18,6 @@
  *  TODO: Merge first round (backup.ino) into code.
  */
 
-
 #include <Adafruit_MotorShield.h>
 #include <Servo.h>
 
@@ -107,8 +106,6 @@ void loop() {
     if (order == 's') {
       int8_t L_speed = Serial.read();
       int8_t R_speed = Serial.read();
-      Serial.print(L_speed);
-      Serial.println(R_speed);
       Serial.print('r');
       setMotorSpeeds(L_speed, R_speed);
     }
@@ -126,9 +123,9 @@ void loop() {
   }
   
   // Detection sequence
-  if (analogRead(IR_pin) > 1024) {  // TODO: Calibrate infrared input threshold
+  if (analogRead(IR_pin) > 1023) {  // TODO: Calibrate infrared input threshold
     approach();
-    if (analogRead(HES_pin) > 1024) {  // TODO: Calibrate Hall effect sensor input threshold
+    if (analogRead(HES_pin) > 1023) {  // TODO: Calibrate Hall effect sensor input threshold
       push();
     }
     else {
