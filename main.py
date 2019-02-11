@@ -8,38 +8,44 @@ import sys
 import serial
 import struct
 
-# Area mask:            50:1530, 180:1810   (image)
-#                       0:640, 0:550        (streaming)
+# ---Stored paramters to swap with current---
+# Table mask:           0:1530, 180:1810                    (image)
+#                       0:640, 0:550                        (streaming)
 # Cell parameters:      (160, 80, 50), (255, 190, 130)
 # Robot parameters:     (120, 190, 230), (160, 240, 255)    (orange)
 #                       (170, 130, 200), (210, 170, 240)    (purple)
 #                       (50, 85, 230), (180, 210, 255)      (red)
 #                       (130, 140, 20), (200, 220, 130)     (green)
 
-# User inputs
-streaming = True
-controlled = True
+# ---User inputs---
+streaming = False
+controlled = False
 camera = 1
 image_name = "stream.jpg"
 
-# Parameters
+# ---Parameters---
+# BGR boundaries for colour masks
 cell_boundaries = (((160, 80, 50), (255, 190, 130)),
                    )
 cell_boundaries = np.array(cell_boundaries, dtype="uint8")
-
 robot_boundaries = (((120, 190, 230), (195, 250, 255)),
                     ((170, 130, 190), (230, 205, 240)))
 robot_boundaries = np.array(robot_boundaries, dtype="uint8")
 
+# Dimension thresholds for bounding boxes
 cell_thresholds = ((4, 4), (10, 10))
 robot_thresholds = ((20, 20), (40, 40))
+
+# Dimensions to crop to table
 image_boundaries = ((0, 640), (0, 550))
 
+# Distance in front of the robot centre from which calculations are done
 distance_offset = 35
 
 
+# ---Functions---
 def startStream(camera):
-    """Given a camera returns a stream"""
+    """Given a camera tries to open a stream and returns it."""
     # Start stream
     stream = cv2.VideoCapture(camera)
 
@@ -54,10 +60,12 @@ def startStream(camera):
 
 
 def startSerial():
-    """Given a port, tries to start a serial stream and returns it"""
-    ports = ["COM{}".format(port) for port in range(255)]
+    """Tries to start a serial stream and returns it."""
+    ports = ["COM{}".format(port) for port in range(255)]  # Create list of ports
     active_ports = []
     board = None
+
+    # Check for available ports and open connection with last available port
     for port in ports:
         try:
             board = serial.Serial(port, timeout=1)
@@ -65,41 +73,34 @@ def startSerial():
         except serial.serialutil.SerialException:
             pass
 
-    if len(active_ports) == 0:
-        print("No COM ports open")
-        sys.exit()
-    elif len(active_ports) > 1:
-        board.close()
-        active_ports = input("COM ports {} are open. Please select one:".format(active_ports))
-        active_ports = ["COM{}".format(active_ports)]
-        board = serial.Serial(*active_ports, timeout=1)
-
-    print("Sending to {}...".format(*active_ports))
+    print("Sending to {}...".format(active_ports[-1]))
 
     return board
 
 
 def readColour(boundaries, thresholds):
-    """Given an image, return image with bounding boxes and a colour mask for a given colour boundary set."""
+    """Given BGR boundaries and dimension thresholds, return image of colour mask and coordinates."""
     coordinates = np.array([])
     images_mask = np.zeros(image.shape, dtype="uint8")
 
     # Isolate pixels within BGR boundaries
     for boundary in boundaries:
-        mask = cv2.inRange(image, *boundary)
-        image_mask = cv2.bitwise_and(image, image, mask=mask)
-        images_mask = cv2.bitwise_or(images_mask, image_mask)
+        mask = cv2.inRange(image, *boundary)  # Get mask of image within BGR boundaries
+        image_mask = cv2.bitwise_and(image, image, mask=mask)  # Get masked image from colour mask
+        images_mask = cv2.bitwise_or(images_mask, image_mask)  # Add masked image to existing masked images
 
         # Find contours
-        gray = cv2.cvtColor(image_mask, cv2.COLOR_BGR2GRAY)
-        contours, hierarchy = cv2.findContours(gray, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        gray = cv2.cvtColor(image_mask, cv2.COLOR_BGR2GRAY)  # Convert to grayscale for contour detection
+        contours, hierarchy = cv2.findContours(gray, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)  # Get contours of shapes
 
         # Draw bounding boxes and get coordinates
         for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            if thresholds[0][0] < w < thresholds[1][0] and thresholds[0][1] < h < thresholds[1][1]:
-                cv2.rectangle(image, (x, y), (x + w, y + h), (0, 0, 0), 2)
-                coordinates = np.concatenate((coordinates, [x + w / 2, y + h / 2]))
+            x, y, w, h = cv2.boundingRect(contour)  # Get coordinates of bounding box
+            if thresholds[0][0] < w < thresholds[1][0] and thresholds[0][1] < h < thresholds[1][1]:  # Clip dimensions
+                cv2.rectangle(image, (x, y), (x + w, y + h), (0, 0, 0), 2)  # Draw rectangle
+                coordinates = np.concatenate((coordinates, [x + w / 2, y + h / 2]))  # Append to coordinates of centres
+
+    # Format the coordinates
     coordinates = np.reshape(coordinates, (-1, 2))
     coordinates = np.array(coordinates, dtype="int16")
 
@@ -115,8 +116,7 @@ def readImage(image):
     cell_mask, cell_coordinates = readColour(cell_boundaries, cell_thresholds)
     robot_mask, robot_coordinates = readColour(robot_boundaries, robot_thresholds)
 
-    # Combine colour masks
-    mask = cv2.bitwise_or(cell_mask, robot_mask)
+    mask = cv2.bitwise_or(cell_mask, robot_mask)  # Combine colour masks for display
 
     # Find centre and direction
     if robot_coordinates.shape[0] == 2:
@@ -124,6 +124,7 @@ def readImage(image):
         robot_direction = np.subtract(*robot_coordinates)
         robot_direction = robot_direction / np.linalg.norm(robot_direction)
         robot_centre += robot_direction * distance_offset
+
     else:
         robot_centre = [0, 0]
         robot_direction = [0, 0]
@@ -223,6 +224,7 @@ def drawArrow(image, start, direction):
     cv2.arrowedLine(image, start, end, (0, 0, 255), 2)
 
 
+# Main functions for different user inputs
 if streaming and controlled:
     stream = startStream(camera)
     board = startSerial()
@@ -305,5 +307,4 @@ else:
     cv2.imwrite("vision.jpg", np.hstack((image, mask)))
 
 cv2.destroyAllWindows()
-
 print("Done")
