@@ -8,20 +8,18 @@ import sys
 import serial
 import struct
 
-# Area mask:            50:1530, 180:1810                   (image)
-#                       0:640, 0:550                        (streaming)
+# Area mask:            50:1530, 180:1810   (image)
+#                       0:640, 0:550        (streaming)
 # Cell parameters:      (160, 80, 50), (255, 190, 130)
 # Robot parameters:     (120, 190, 230), (160, 240, 255)    (orange)
 #                       (170, 130, 200), (210, 170, 240)    (purple)
 #                       (50, 85, 230), (180, 210, 255)      (red)
 #                       (130, 140, 20), (200, 220, 130)     (green)
-# Coordinates:          (50, 60)                            (top left safe zone centre)
-#                       (5, 280)                            (safe zone centre)
 
 # User inputs
-streaming = False
-controlled = False
-camera = 2
+streaming = True
+controlled = True
+camera = 1
 image_name = "stream.jpg"
 
 # Parameters
@@ -136,7 +134,7 @@ def readImage(image):
     return image, cell_coordinates, (robot_centre, robot_direction), mask
 
 
-def findNearestCell():
+def findNearestCell(robot_centre, robot_direction, cell_coordinates):
     """Given the current positions of everything, return the coordinates of and distance and angle to the closest
     cell"""
     if cell_coordinates.shape[0] and robot_centre[0]:
@@ -162,16 +160,29 @@ def findNearestCell():
     return min_coordinates, min_distance, min_angle
 
 
-def approachCell(distance, angle):
+def approachCell(min_distance, min_angle):
     """Given a distance and angle to a cell, returns motor speeds."""
-    if np.abs(angle) > 0.1:
-        scaled_angle = np.clip(angle, -1, 1)
+    if np.abs(min_angle) > 0.1:
+        scaled_angle = np.clip(min_angle, -1, 1)
         motor_speeds = (scaled_angle, -scaled_angle)
     else:
-        scaled_distance = np.clip(distance, -1, 1)
+        scaled_distance = np.clip(min_distance, -1, 1)
         motor_speeds = (scaled_distance, scaled_distance)
 
     return motor_speeds
+
+
+def sendSpeeds(motor_speeds):
+    """Given motor speeds, sends them to the board."""
+    if board.read() == b'r':
+        motor_speeds = [speed * 127 for speed in motor_speeds]
+        motor_speeds = np.array(motor_speeds, dtype="int8")
+        buffer = bytearray(struct.pack('cbb', b's', *motor_speeds))
+        board.write(buffer)
+
+        sent = struct.unpack('cbb', buffer)[1:]
+        received = board.readline().decode()
+        print("Sent: {}{}  Received: {}".format(*sent, received))
 
 
 def processPlayer():
@@ -201,29 +212,6 @@ def processPlayer():
     return motor_speeds
 
 
-def sendSpeeds():
-    """Given motor speeds, sends them to the board."""
-    motor_speeds = [speed * 127 for speed in motor_speeds]
-    motor_speeds = np.array(motor_speeds, dtype="int8")
-    buffer = bytearray(struct.pack('cbb', b's', *motor_speeds))
-    board.write(buffer)
-
-
-def ignoreActiveCell():
-    """When called, modifies active cell filter to ignore active cells."""
-    active_cell_coordinates, _, _ = findNearestCell()
-    active_cells.append(active_cell_coordinates)
-
-
-def read():
-    """Reads and interprets serial inputs from the board."""
-    order = board.read()
-    if order == b'r':
-        sendSpeeds()
-    elif order == b'a':
-        ignoreActiveCell()
-
-
 def drawArrow(image, start, direction):
     """Given an image, a point and a direction, draws a line on the image."""
     start = np.array(start, dtype="int16")
@@ -235,9 +223,8 @@ def drawArrow(image, start, direction):
     cv2.arrowedLine(image, start, end, (0, 0, 255), 2)
 
 
-if streaming:
+if streaming and controlled:
     stream = startStream(camera)
-
     board = startSerial()
 
     # Main loop for streaming
@@ -253,19 +240,21 @@ if streaming:
 
         image, cell_coordinates, (robot_centre, robot_direction), mask = readImage(image)
 
-        min_coordinates, min_distance, min_angle = findNearestCell()
+        min_coordinates, min_distance, min_angle = findNearestCell(robot_centre, robot_direction,
+                                                                   cell_coordinates)
 
-        motor_speeds = approachCell(min_distance, min_angle)
+        motor_speeds = processPlayer()
 
-        sendSpeeds()
+        sendSpeeds(motor_speeds)
 
         cv2.imshow("Stream", np.hstack((image, mask)))
 
     stream.release()
     board.close()
 
-elif streaming and controlled:
+elif streaming:
     stream = startStream(camera)
+
     board = startSerial()
 
     # Main loop for streaming
@@ -281,11 +270,12 @@ elif streaming and controlled:
 
         image, cell_coordinates, (robot_centre, robot_direction), mask = readImage(image)
 
-        min_coordinates, min_distance, min_angle = findNearestCell()
+        min_coordinates, min_distance, min_angle = findNearestCell(robot_centre, robot_direction,
+                                                                   cell_coordinates)
 
-        motor_speeds = processPlayer()
+        motor_speeds = approachCell(min_distance, min_angle)
 
-        read()
+        sendSpeeds(motor_speeds)
 
         cv2.imshow("Stream", np.hstack((image, mask)))
 
@@ -297,7 +287,7 @@ elif controlled:
     image = False
     while True:
         motor_speeds = processPlayer()
-        read()
+        sendSpeeds(motor_speeds)
         if keyboard.is_pressed('esc'):
             break
     board.close()
@@ -307,7 +297,8 @@ else:
 
     image, cell_coordinates, (robot_centre, robot_direction), mask = readImage(image)
 
-    min_coordinates, min_distance, min_angle = findNearestCell()
+    min_coordinates, min_distance, min_angle = findNearestCell(robot_centre, robot_direction,
+                                                               cell_coordinates)
 
     motor_speeds = approachCell(min_distance, min_angle)
 
